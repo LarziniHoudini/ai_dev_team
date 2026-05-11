@@ -1,48 +1,105 @@
-<div class="container">
-    <h1>GitHub Agent Command Center</h1>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Java Agent Command Center</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; padding: 30px; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        h1 { color: #1a73e8; border-bottom: 2px solid #e8eaed; padding-bottom: 15px; margin-top: 0; }
+        .section-box { background: #f8f9fa; border: 1px solid #dee2e6; padding: 20px; border-radius: 8px; margin-bottom: 25px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: 600; font-size: 0.9em; }
+        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ced4da; border-radius: 4px; box-sizing: border-box; }
+        .btn { padding: 10px 18px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; transition: 0.2s; }
+        .btn-refresh { background: #34a853; color: white; }
+        .btn-primary { background: #1a73e8; color: white; width: 100%; }
+        .btn-close { background: #ea4335; color: white; font-size: 0.8em; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; }
+        th, td { padding: 15px; border-bottom: 1px solid #edf2f7; text-align: left; }
+        th { background: #f1f3f4; color: #5f6368; text-transform: uppercase; font-size: 0.8em; letter-spacing: 1px; }
+        .badge { padding: 4px 10px; border-radius: 20px; font-size: 0.75em; font-weight: bold; margin-right: 5px; text-transform: capitalize; }
+        .bug { background: #fce8e6; color: #d93025; }
+        .enhancement { background: #e6f4ea; color: #1e8e3e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>GitHub Agent Dashboard</h1>
 
-    <form action="/refresh_repos" method="POST">
-        <button type="submit" class="btn btn-refresh">🔄 Sync Repo List</button>
-    </form>
-
-    <form action="/fetch_issues" method="POST" style="margin-top: 10px;">
-        <select name="repository" onchange="this.form.submit()">
-            <option>-- Select a Repo to Load Issues --</option>
-            {% for repo in repos %}
-            <option value="{{ repo }}" {{ 'selected' if repo == selected_repo }}>{{ repo }}</option>
-            {% endfor %}
-        </select>
-    </form>
-
-    <hr>
-
-    <h3>Active Tasks (Bugs & Enhancements)</h3>
-    <table>
-        <thead>
-            <tr>
-                <th>ID</th>
-                <th>Task Title</th>
-                <th>Labels</th>
-                <th>Action</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for issue in issues %}
-            <tr>
-                <td>#{{ issue.id }}</td>
-                <td><strong>{{ issue.title }}</strong></td>
-                <td>
-                    {% for label in issue.labels %}
-                    <span class="badge">{{ label }}</span>
+        <!-- Repo Sync -->
+        <div class="section-box">
+            <form action="/refresh_repos" method="POST" style="display: inline;">
+                <button type="submit" class="btn btn-refresh">🔄 Sync GitHub Repos</button>
+            </form>
+            <form action="/fetch_issues" method="POST" style="display: inline-block; margin-left: 10px; width: 70%;">
+                <select name="repository" onchange="this.form.submit()">
+                    <option value="">-- Select Repository to Load --</option>
+                    {% for repo in repos %}
+                    <option value="{{ repo }}" {{ 'selected' if repo == selected_repo }}>{{ repo }}</option>
                     {% endfor %}
-                </td>
-                <td>
-                    <form action="/close_issue/{{ issue.id }}" method="POST">
-                        <button type="submit" class="btn" style="background:#e74c3c;">Mark Done</button>
-                    </form>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
+                </select>
+            </form>
+        </div>
+
+        {% if selected_repo %}
+        <!-- Create Issue Form -->
+        <div class="section-box">
+            <h3>Add New Task to {{ selected_repo }}</h3>
+            <form action="/create_issue" method="POST">
+                <div class="form-group">
+                    <label>Category</label>
+                    <select name="category">
+                        <option value="bug">Bug Report</option>
+                        <option value="enhancement">New Feature / Enhancement</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Title</label>
+                    <input type="text" name="title" placeholder="Summary of the task" required>
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea name="description" rows="3" placeholder="Detailed instructions for the agent..."></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary">Create GitHub Issue</button>
+            </form>
+        </div>
+
+        <!-- Issue Table -->
+        <h3>Active Tasks</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 80px;">ID</th>
+                    <th>Task</th>
+                    <th>Labels</th>
+                    <th style="width: 120px;">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for issue in issues %}
+                <tr>
+                    <td>#{{ issue.id }}</td>
+                    <td><strong>{{ issue.title }}</strong><br><small style="color:#666;">{{ issue.body[:100] }}...</small></td>
+                    <td>
+                        {% for label in issue.labels %}
+                        <span class="badge {{ label }}">{{ label }}</span>
+                        {% endfor %}
+                    </td>
+                    <td>
+                        <form action="/close_issue/{{ issue.id }}" method="POST">
+                            <button type="submit" class="btn btn-close">Mark Done</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="text-align: center; color: #666; margin-top: 50px;">Select a repository above to start managing agent tasks.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
