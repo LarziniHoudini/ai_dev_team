@@ -1,0 +1,66 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Agentic Dev Panel</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f7f6; padding: 40px; color: #333; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
+        button { background: #3498db; color: white; border: none; padding: 12px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; width: 100%; }
+        button:hover { background: #2980b9; }
+        table { width: 100%; border-collapse: collapse; margin-top: 30px; }
+        th, td { padding: 12px; border-bottom: 1px solid #eee; text-align: left; }
+        th { background: #f8f9fa; }
+        .type-badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+        .feature { background: #d4edda; color: #155724; }
+        .bug { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Java Agent Task Manager</h1>
+        <form action="/add" method="POST">
+            <div class="form-group">
+                <label>Task Category</label>
+                <select name="category">
+                    <option value="Features">New Feature</option>
+                    <option value="Bugs">Bug Report</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Title</label>
+                <input type="text" name="title" placeholder="e.g. Create User Authentication Controller" required>
+            </div>
+            <div class="form-group">
+                <label>Details / Instructions</label>
+                <textarea name="description" rows="4" placeholder="Be specific for the Researcher agent..." required></textarea>
+            </div>
+            <button type="submit">Sync to Excel & Notify Agents</button>
+        </form>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Title</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for task in tasks %}
+                <tr>
+                    <td><span class="type-badge {{ 'feature' if task.type == 'Features' else 'bug' }}">{{ task.type }}</span></td>
+                    <td>{{ task.Title }}</td>
+                    <td>{{ task.Status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
