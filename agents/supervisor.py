@@ -2,129 +2,117 @@ import os
 import json
 import time
 import subprocess
+import re
 from dotenv import load_dotenv
 from github import Github
 import ollama
 
 # 1. PATH CONFIGURATION
-# base_dir is E:\AgenticAI\ai_dev_team\agents
 base_dir = os.path.dirname(os.path.abspath(__file__))
-# Load .env from the parent directory (root)
 load_dotenv(os.path.join(base_dir, '..', '.env'))
 
-# GitHub & Directory Setup
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 g = Github(GITHUB_TOKEN)
-WORKSPACE_DIR = os.path.join(base_dir, '..', 'workspace')
-CONFIG_FILE = os.path.join(base_dir, '..', 'active_config.json')
 
-# Model Setup
+WORKSPACE_DIR = os.path.normpath(os.path.join(base_dir, '..', 'workspace'))
+CONFIG_FILE = os.path.normpath(os.path.join(base_dir, '..', 'active_config.json'))
+
 PLANNER_MODEL = "llama3.1:8b"
 CODER_MODEL = "qwen2.5-coder:7b"
 
 def get_target_from_config():
-    """Reads the repository selected in the Web UI."""
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, 'r') as f:
-                data = json.load(f)
-                return data.get("target_repo")
-        except Exception as e:
-            print(f"[!] Error reading config: {e}")
-    return None
+    if not os.path.exists(CONFIG_FILE):
+        return None
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            data = json.load(f)
+            return data.get("target_repo")
+    except (json.JSONDecodeError, Exception):
+        return None
 
 def clone_repo(repo_full_name):
-    """Clones the target repo into the workspace if it doesn't exist."""
     if not os.path.exists(WORKSPACE_DIR):
         os.makedirs(WORKSPACE_DIR)
-        
     repo_name = repo_full_name.split('/')[-1]
     repo_path = os.path.join(WORKSPACE_DIR, repo_name)
-    
     if not os.path.exists(repo_path):
-        print(f"[*] Cloning {repo_full_name} into workspace...")
-        subprocess.run(["git", "clone", f"https://github.com/{repo_full_name}.git", repo_path], check=True)
-    else:
-        print(f"[*] Repository {repo_name} already exists in workspace.")
-    return repo_path
+        print(f"[*] Cloning {repo_full_name}...")
+        subprocess.run(["git", "clone", f"https://github.com/{repo_full_name}.git", repo_path], check=True, shell=True)
+    return os.path.abspath(repo_path)
 
 def generate_research_plan(issue_title, issue_body):
-    """Agent 1: Llama 3.1 analyzes the GitHub issue."""
-    print(f"\n[*] Consulting {PLANNER_MODEL} for a research plan...")
-    prompt = f"""
-    You are a Senior Lead Developer. Analyze this GitHub issue and provide a technical implementation plan.
-    ISSUE TITLE: {issue_title}
-    ISSUE BODY: {issue_body}
-    
-    Provide your plan in bullet points, focusing on which files to check and logic changes.
-    """
+    print(f"\n[*] RESEARCHER ({PLANNER_MODEL}) is thinking...")
+    prompt = f"Technical Plan for: {issue_title}\nDetails: {issue_body}\nList files to modify."
     response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
-    return response['response']
+    return response.get('response', str(response))
 
-def execute_coding_task(plan, repo_path):
-    """Agent 2: Qwen 2.5 Coder generates the actual code suggestions."""
-    print(f"[*] Consulting {CODER_MODEL} for code changes...")
-    prompt = f"""
-    You are an Expert Coder. Based on the following research plan and the code located at {repo_path}, 
-    generate the specific code changes needed.
-    
-    PLAN: {plan}
-    
-    Output the code changes clearly in Markdown blocks.
-    """
+def execute_coding_task(plan):
+    print(f"[*] CODER ({CODER_MODEL}) is writing code...")
+    prompt = f"Plan: {plan}\nGenerate the full code for the fix. Use markdown blocks."
     response = ollama.generate(model=CODER_MODEL, prompt=prompt)
-    return response['response']
+    return response.get('response', str(response))
+
+def execute_review(plan, code):
+    print(f"[*] REVIEWER ({PLANNER_MODEL}) is checking code...")
+    prompt = f"Check this code against the plan:\nPLAN: {plan}\nCODE: {code}\nIf good, end with 'STATUS: PASSED'."
+    response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
+    return response.get('response', str(response))
+
+def write_to_disk(repo_path, ai_text):
+    match = re.search(r'### File: ([\w\./\-]+)', ai_text) or re.search(r'# ([\w\./\-]+\.\w+)', ai_text)
+    suggested = match.group(1) if match else "fix_output.txt"
+    
+    print(f"\n[?] Suggested file: {suggested}")
+    # Line 76 fix: ensured the input string and parenthesis are correctly closed
+    user_file = input(f"Confirm filename (Enter for '{suggested}'): ") or suggested
+    
+    code_blocks = re.findall(r'```(?:\w+)?\n(.*?)\n```', ai_text, re.DOTALL)
+    content = code_blocks[0] if code_blocks else ai_text
+    
+    full_path = os.path.join(repo_path, user_file)
+    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    
+    with open(full_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    print(f"[SUCCESS] Saved to {full_path}")
 
 def supervisor_loop():
-    """Main control loop that waits for UI input and user commands."""
-    print("=== Supervisor Agent is Online ===")
-    
+    print("=== AI DEV TEAM ONLINE ===")
     while True:
         repo_name = get_target_from_config()
-        
         if not repo_name:
-            print("[?] No repo selected in Web UI. Waiting...", end="\r")
+            print("[?] Waiting for UI selection...", end="\r")
             time.sleep(5)
             continue
 
-        print(f"\n\n[!] ACTIVE REPO: {repo_name}")
         try:
             repo = g.get_repo(repo_name)
-            # Only pull issues labeled as bugs or enhancements
-            issues = [i for i in repo.get_issues(state='open') 
-                      if any(l.name.lower() in ['bug', 'enhancement'] for l in i.labels)]
+            issues = [i for i in repo.get_issues(state='open') if any(l.name.lower() in ['bug', 'enhancement'] for l in i.labels)]
             
-            if not issues:
-                print(f"[!] No open bug/enhancement issues found in {repo_name}.")
-                time.sleep(10)
-                continue
-
             for issue in issues:
-                print(f"\n{'='*60}")
-                print(f"TASK: #{issue.number} - {issue.title}")
-                print(f"{'='*60}")
+                print(f"\n>>> TASK: #{issue.number} {issue.title}")
+                r_path = clone_repo(repo_name)
                 
-                # TRIGGER 1: RESEARCHER
-                cmd = input(f"Press 'r' to trigger RESEARCHER (Llama 3.1) or 's' to skip: ").lower()
-                if cmd == 'r':
-                    repo_path = clone_repo(repo_name)
+                if input("Run RESEARCHER? (y/n): ").lower() == 'y':
                     plan = generate_research_plan(issue.title, issue.body)
-                    print(f"\n[RESEARCH PLAN FROM LLAMA]:\n{plan}")
+                    print(f"\nPLAN:\n{plan}")
                     
-                    # TRIGGER 2: CODER
-                    cmd = input(f"\nPress 'c' to trigger CODER (Qwen 2.5) or 's' to skip: ").lower()
-                    if cmd == 'c':
-                        suggestions = execute_coding_task(plan, repo_path)
-                        print(f"\n[CODE SUGGESTIONS FROM QWEN]:\n{suggestions}")
-                
-                print(f"\n[*] Finished processing Issue #{issue.number}.")
+                    if input("\nRun CODER? (y/n): ").lower() == 'y':
+                        code = execute_coding_task(plan)
+                        print(f"\nCODE:\n{code}")
+                        
+                        if input("\nRun REVIEWER? (y/n): ").lower() == 'y':
+                            review = execute_review(plan, code)
+                            print(f"\nREVIEW:\n{review}")
+                            
+                            if "STATUS: PASSED" in review or input("Write anyway? (y/n): ").lower() == 'y':
+                                write_to_disk(r_path, code)
             
-            print("\n[*] All issues for this repo processed. Waiting for new tasks...")
-            time.sleep(15)
-
+            print("\n[*] Batch complete. Sleeping 30s...")
+            time.sleep(30)
         except Exception as e:
             print(f"\n[ERROR]: {e}")
-            time.sleep(5)
+            time.sleep(10)
 
 if __name__ == "__main__":
     supervisor_loop()
