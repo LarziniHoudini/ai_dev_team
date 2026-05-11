@@ -4,6 +4,7 @@ from flask import Flask, render_template, request, redirect
 from flask.cli import load_dotenv
 from github import Github
 import os
+import json
 
 app = Flask(__name__)
 
@@ -43,6 +44,27 @@ def fetch_issues():
     
     current_repo_name = repo_full_name
     return fetch_issues_logic(repo_full_name)
+
+@app.route('/activate_supervisor', methods=['POST'])
+def activate_supervisor():
+    # 1. Get the name directly from the form submit
+    repo_name = request.form.get('repo_to_start')
+    
+    if repo_name:
+        # 2. Get absolute path to the root folder
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(base_dir, '..', 'active_config.json')
+        
+        # 3. Write it clearly
+        with open(config_path, 'w') as f:
+            json.dump({"target_repo": repo_name}, f)
+        
+        print(f"[*] SUCCESS: Wrote {repo_name} to config file.")
+    else:
+        print("[!] ERROR: No repo name found in the web request.")
+        
+    return redirect('/')
+
 
 @app.route('/create_issue', methods=['POST'])
 def create_issue():

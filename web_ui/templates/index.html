@@ -41,7 +41,25 @@
                     {% endfor %}
                 </select>
             </form>
+           
         </div>
+
+
+<div class="section-box" style="border: 2px solid #1a73e8;">
+    <h3>Agent Control Panel</h3>
+    <p>Targeting: <strong>{{ selected_repo }}</strong></p>
+    
+    <form action="/activate_supervisor" method="POST">
+        <!-- This is the secret sauce: it sends the name directly to Python -->
+        <input type="hidden" name="repo_to_start" value="{{ selected_repo }}">
+        <button type="submit" class="btn btn-primary">
+            🚀 Activate Supervisor for this Repo
+        </button>
+    </form>
+</div>
+
+
+    
 
         {% if selected_repo %}
         <!-- Create Issue Form -->
