@@ -1,85 +1,76 @@
 from flask import Flask, render_template, request, redirect
-import pandas as pd
+from github import Github
 import os
 
 app = Flask(__name__)
-EXCEL_FILE = 'tasks_backlog.xlsx'
 
-def initialize_excel():
-    """Creates the excel file with correct sheets if it doesn't exist."""
-    if not os.path.exists(EXCEL_FILE):
-        with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl') as writer:
-            pd.DataFrame(columns=['Title', 'Description', 'Status']).to_excel(writer, sheet_name='Features', index=False)
-            pd.DataFrame(columns=['Title', 'Description', 'Status']).to_excel(writer, sheet_name='Bugs', index=False)
-        print(f"Created new database: {EXCEL_FILE}")
+# --- CONFIG ---
+GITHUB_TOKEN = "YOUR_GITHUB_TOKEN_HERE"
+g = Github(GITHUB_TOKEN)
 
-def get_all_tasks():
-    """Reads all sheets and returns a combined list for the UI."""
-    initialize_excel()
-    try:
-        with pd.ExcelFile(EXCEL_FILE) as xls:
-            f_df = pd.read_excel(xls, sheet_name='Features')
-            b_df = pd.read_excel(xls, sheet_name='Bugs')
-        
-        # Add a helper 'type' key so the HTML knows which CSS class to use
-        features = f_df.to_dict('records')
-        for item in features: item['type'] = 'Features'
-        
-        bugs = b_df.to_dict('records')
-        for item in bugs: item['type'] = 'Bugs'
-        
-        return features + bugs
-    except Exception as e:
-        print(f"Error reading Excel: {e}")
-        return []
+# Temporary memory to store fetched data
+current_repo_name = None
+repo_list = []
+issue_list = []
 
 @app.route('/')
 def index():
-    tasks = get_all_tasks()
-    return render_template('index.html', tasks=tasks)
+    return render_template('index.html', 
+                           repos=repo_list, 
+                           issues=issue_list, 
+                           selected_repo=current_repo_name)
 
-@app.route('/add', methods=['POST'])
-def add():
-    category = request.form.get('category') # 'Features' or 'Bugs'
-    title = request.form.get('title')
-    description = request.form.get('description')
+@app.route('/refresh_repos', methods=['POST'])
+def refresh_repos():
+    global repo_list
+    repo_list = [repo.full_name for repo in g.get_user().get_repos()]
+    repo_list.sort()
+    return redirect('/')
+
+@app.route('/fetch_issues', methods=['POST'])
+def fetch_issues():
+    global issue_list, current_repo_name
+    repo_full_name = request.form.get('repository')
+    current_repo_name = repo_full_name
     
-    try:
-        # 1. Load everything into memory to avoid partial overwrites
-        with pd.ExcelFile(EXCEL_FILE) as xls:
-            features_df = pd.read_excel(xls, 'Features')
-            bugs_df = pd.read_excel(xls, 'Bugs')
-        
-        # 2. Create the new task entry
-        new_row = pd.DataFrame([{
-            'Title': title, 
-            'Description': description, 
-            'Status': 'Pending'
-        }])
-        
-        # 3. Update the specific dataframe
-        if category == 'Features':
-            features_df = pd.concat([features_df, new_row], ignore_index=True)
-        else:
-            bugs_df = pd.concat([bugs_df, new_row], ignore_index=True)
-            
-        # 4. Save the entire workbook back to disk
-        with pd.ExcelWriter(EXCEL_FILE, engine='openpyxl') as writer:
-            features_df.to_excel(writer, sheet_name='Features', index=False)
-            bugs_df.to_excel(writer, sheet_name='Bugs', index=False)
-        
-        print(f"Successfully added {category}: {title}")
-            
-    except PermissionError:
-        print("ERROR: Could not save! Please close 'tasks_backlog.xlsx' in Excel first.")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-            
+    repo = g.get_repo(repo_full_name)
+    # Fetch open issues
+    raw_issues = repo.get_issues(state='open')
+    
+    issue_list = []
+    for i in raw_issues:
+        # Filter for specifically 'bug' or 'enhancement'
+        labels = [l.name.lower() for l in i.labels]
+        if 'bug' in labels or 'enhancement' in labels:
+            issue_list.append({
+                'id': i.number,
+                'title': i.title,
+                'body': i.body,
+                'labels': labels,
+                'url': i.html_url
+            })
+    return redirect('/')
+
+@app.route('/close_issue/<int:issue_id>', methods=['POST'])
+def close_issue(issue_id):
+    if current_repo_name:
+        repo = g.get_repo(current_repo_name)
+        issue = repo.get_issue(number=issue_id)
+        issue.edit(state='closed')
+        # Refresh the local list after closing
+        return fetch_issues_logic(current_repo_name)
+    return redirect('/')
+
+def fetch_issues_logic(repo_name):
+    # Helper to refresh list internally
+    global issue_list
+    repo = g.get_repo(repo_name)
+    raw_issues = repo.get_issues(state='open')
+    issue_list = [{
+        'id': i.number, 'title': i.title, 'body': i.body, 
+        'labels': [l.name for l in i.labels]
+    } for i in raw_issues if any(l.name.lower() in ['bug', 'enhancement'] for l in i.labels)]
     return redirect('/')
 
 if __name__ == '__main__':
-    initialize_excel()
-    print("\n" + "="*30)
-    print("WEB UI: http://127.0.0.1:5000")
-    print("="*30 + "\n")
     app.run(debug=True)
