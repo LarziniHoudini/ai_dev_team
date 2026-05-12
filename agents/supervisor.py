@@ -92,6 +92,7 @@ def generate_research_plan(issue_title, issue_body, repo_path):
     4. Focus 100% on the logic/styling required to close the issue.
     5. Identify the EXACT file from the list above to modify.
     6. If a folder is provided, only look in that folder!
+    7. Never look in the .git/ and venv/ folders!
     """
     
     response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
