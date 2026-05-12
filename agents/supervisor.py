@@ -125,7 +125,8 @@ def supervisor_loop():
                 r_path = clone_repo(repo_name)
                 
                 if input("Run RESEARCHER? (y/n): ").lower() == 'y':
-                    plan = generate_research_plan(issue.title, issue.body)
+                    # plan = generate_research_plan(issue.title, issue.body)
+                    plan = generate_research_plan(issue.title, issue.body, r_path)
                     print(f"\nPLAN:\n{plan}")
                     
                     if input("\nRun CODER? (y/n): ").lower() == 'y':
