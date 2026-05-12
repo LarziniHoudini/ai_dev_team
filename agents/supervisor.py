@@ -41,40 +41,48 @@ def clone_repo(repo_full_name):
     return os.path.abspath(repo_path)
 
 def generate_research_plan(issue_title, issue_body, repo_path):
-    # 1. Get file list
-    existing_files = []
+    # 1. Map out the full file structure
+    all_files = []
     for root, dirs, files in os.walk(repo_path):
         if '.git' in dirs: dirs.remove('.git')
         for file in files:
-            existing_files.append(os.path.relpath(os.path.join(root, file), repo_path))
+            all_files.append(os.path.relpath(os.path.join(root, file), repo_path))
     
-    file_list_str = "\n".join(existing_files)
+    # 2. PRIORITY LOGIC: Did the user mention a folder?
+    combined_text = (issue_title + " " + issue_body).lower()
+    targeted_files = []
+    
+    # Check if any part of the path is mentioned in the issue
+    for f in all_files:
+        path_parts = f.lower().split(os.sep)
+        if any(part in combined_text for part in path_parts if len(part) > 3):
+            targeted_files.append(f)
 
-    # 2. Dynamic Context: Find the most likely file to read
-    # We'll look for keywords in the issue to guess which file to 'read' for context
-    potential_target = "index.html" # Default
-    for f in existing_files:
-        if any(word in f.lower() for word in issue_title.lower().split()):
-            potential_target = f
-            break
-            
+    # If we found matches in the mentioned folder, prioritize them
+    # Otherwise, show all files but highlight the folder matches
+    display_files = targeted_files if targeted_files else all_files
+    file_list_str = "\n".join(display_files)
+
+    # 3. Choose the 'Primary' file to read for context
+    # If the user mentioned a specific folder/file, pick that first
+    potential_target = targeted_files[0] if targeted_files else all_files[0]
+    
     file_content = ""
     target_path = os.path.join(repo_path, potential_target)
     if os.path.exists(target_path):
         with open(target_path, 'r', encoding='utf-8') as f:
             file_content = f.read()
 
-    print(f"\n[*] RESEARCHER is analyzing {potential_target} for context...")
+    print(f"\n[*] RESEARCHER focuses on: {potential_target}")
     
     prompt = f"""
-    You are a Pragmatic Senior Developer. 
-    Task: {issue_title}
-    Description: {issue_body}
+    You are a Senior Lead Developer. 
+    THE USER HAS MENTIONED A SPECIFIC AREA: {combined_text}
     
-    Available Files: 
+    ONLY CONSIDER THESE FILES:
     {file_list_str}
     
-    Content of {potential_target}:
+    CONTEXT CONTENT ({potential_target}):
     {file_content}
     
     GUIDELINES:
@@ -83,6 +91,7 @@ def generate_research_plan(issue_title, issue_body, repo_path):
     3. Do NOT suggest infrastructure changes, package installs, or 'best practice' files (like separate CSS/JS) unless they already exist in the file list.
     4. Focus 100% on the logic/styling required to close the issue.
     5. Identify the EXACT file from the list above to modify.
+    6. If a folder is provided, only look in that folder!
     """
     
     response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
