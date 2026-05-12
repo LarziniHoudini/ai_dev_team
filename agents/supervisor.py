@@ -41,37 +41,48 @@ def clone_repo(repo_full_name):
     return os.path.abspath(repo_path)
 
 def generate_research_plan(issue_title, issue_body, repo_path):
-    """Agent 1: Now with 100% more context awareness!"""
-    
-    # 1. Get a list of every file actually in the repo
+    # 1. Get file list
     existing_files = []
     for root, dirs, files in os.walk(repo_path):
-        # Skip the .git folder to keep the list clean
-        if '.git' in dirs:
-            dirs.remove('.git')
+        if '.git' in dirs: dirs.remove('.git')
         for file in files:
-            # Get the path relative to the repo root (e.g., 'index.html')
-            relative_path = os.path.relpath(os.path.join(root, file), repo_path)
-            existing_files.append(relative_path)
+            existing_files.append(os.path.relpath(os.path.join(root, file), repo_path))
     
     file_list_str = "\n".join(existing_files)
 
-    print(f"\n[*] Consulting {PLANNER_MODEL} with REAL file structure...")
+    # 2. Dynamic Context: Find the most likely file to read
+    # We'll look for keywords in the issue to guess which file to 'read' for context
+    potential_target = "index.html" # Default
+    for f in existing_files:
+        if any(word in f.lower() for word in issue_title.lower().split()):
+            potential_target = f
+            break
+            
+    file_content = ""
+    target_path = os.path.join(repo_path, potential_target)
+    if os.path.exists(target_path):
+        with open(target_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+
+    print(f"\n[*] RESEARCHER is analyzing {potential_target} for context...")
     
     prompt = f"""
-    You are a Senior Lead Developer. Analyze this GitHub issue based ONLY on the existing files listed below.
+    You are a Pragmatic Senior Developer. 
+    Task: {issue_title}
+    Description: {issue_body}
     
-    ISSUE TITLE: {issue_title}
-    ISSUE BODY: {issue_body}
-    
-    EXISTING FILES IN WORKSPACE:
+    Available Files: 
     {file_list_str}
     
-    INSTRUCTIONS:
-    1. Do NOT suggest creating new files unless absolutely necessary.
-    2. Identify which specific file from the list above needs to be modified.
-    3. If you see inline CSS in an HTML file and no .css file exists, suggest modifying the HTML file.
-    4. Provide a step-by-step technical plan.
+    Content of {potential_target}:
+    {file_content}
+    
+    GUIDELINES:
+    1. Identify the specific file(s) that need modification based on the evidence provided.
+    2. Suggest the most direct technical solution. 
+    3. Do NOT suggest infrastructure changes, package installs, or 'best practice' files (like separate CSS/JS) unless they already exist in the file list.
+    4. Focus 100% on the logic/styling required to close the issue.
+    5. Identify the EXACT file from the list above to modify.
     """
     
     response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
@@ -89,23 +100,35 @@ def execute_review(plan, code):
     response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
     return response.get('response', str(response))
 
+# --- UPDATED: THE ACTUAL WORKER ---
 def write_to_disk(repo_path, ai_text):
+    """This function now applies the changes directly to your file."""
+    # Find the filename in the AI text or default to index.html
     match = re.search(r'### File: ([\w\./\-]+)', ai_text) or re.search(r'# ([\w\./\-]+\.\w+)', ai_text)
-    suggested = match.group(1) if match else "fix_output.txt"
+    target_file = match.group(1) if match else "index.html"
     
-    print(f"\n[?] Suggested file: {suggested}")
-    # Line 76 fix: ensured the input string and parenthesis are correctly closed
-    user_file = input(f"Confirm filename (Enter for '{suggested}'): ") or suggested
+    full_path = os.path.normpath(os.path.join(repo_path, target_file))
     
+    # Extract code from triple backticks
     code_blocks = re.findall(r'```(?:\w+)?\n(.*?)\n```', ai_text, re.DOTALL)
-    content = code_blocks[0] if code_blocks else ai_text
+    if not code_blocks:
+        print("[!] Error: No code blocks found in AI response. Cannot apply changes.")
+        return
+
+    new_content = code_blocks[0]
     
-    full_path = os.path.join(repo_path, user_file)
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    print(f"\n[!] READY TO APPLY CHANGES TO: {full_path}")
+    confirm = input("Are you sure you want to OVERWRITE this file? (y/n): ")
     
-    with open(full_path, 'w', encoding='utf-8') as f:
-        f.write(content)
-    print(f"[SUCCESS] Saved to {full_path}")
+    if confirm.lower() == 'y':
+        try:
+            with open(full_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print(f"[SUCCESS] Changes applied to {target_file}!")
+        except Exception as e:
+            print(f"[ERROR] Failed to write to file: {e}")
+    else:
+        print("[*] Change cancelled by user.")
 
 def supervisor_loop():
     print("=== AI DEV TEAM ONLINE ===")
