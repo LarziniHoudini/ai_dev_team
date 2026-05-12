@@ -40,9 +40,40 @@ def clone_repo(repo_full_name):
         subprocess.run(["git", "clone", f"https://github.com/{repo_full_name}.git", repo_path], check=True, shell=True)
     return os.path.abspath(repo_path)
 
-def generate_research_plan(issue_title, issue_body):
-    print(f"\n[*] RESEARCHER ({PLANNER_MODEL}) is thinking...")
-    prompt = f"Technical Plan for: {issue_title}\nDetails: {issue_body}\nList files to modify."
+def generate_research_plan(issue_title, issue_body, repo_path):
+    """Agent 1: Now with 100% more context awareness!"""
+    
+    # 1. Get a list of every file actually in the repo
+    existing_files = []
+    for root, dirs, files in os.walk(repo_path):
+        # Skip the .git folder to keep the list clean
+        if '.git' in dirs:
+            dirs.remove('.git')
+        for file in files:
+            # Get the path relative to the repo root (e.g., 'index.html')
+            relative_path = os.path.relpath(os.path.join(root, file), repo_path)
+            existing_files.append(relative_path)
+    
+    file_list_str = "\n".join(existing_files)
+
+    print(f"\n[*] Consulting {PLANNER_MODEL} with REAL file structure...")
+    
+    prompt = f"""
+    You are a Senior Lead Developer. Analyze this GitHub issue based ONLY on the existing files listed below.
+    
+    ISSUE TITLE: {issue_title}
+    ISSUE BODY: {issue_body}
+    
+    EXISTING FILES IN WORKSPACE:
+    {file_list_str}
+    
+    INSTRUCTIONS:
+    1. Do NOT suggest creating new files unless absolutely necessary.
+    2. Identify which specific file from the list above needs to be modified.
+    3. If you see inline CSS in an HTML file and no .css file exists, suggest modifying the HTML file.
+    4. Provide a step-by-step technical plan.
+    """
+    
     response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
     return response.get('response', str(response))
 
