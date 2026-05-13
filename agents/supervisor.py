@@ -3,6 +3,8 @@ import json
 import time
 import subprocess
 import re
+from urllib import response
+from click import prompt
 from dotenv import load_dotenv
 from github import Github
 import ollama
@@ -41,68 +43,163 @@ def clone_repo(repo_full_name):
     return os.path.abspath(repo_path)
 
 def generate_research_plan(issue_title, issue_body, repo_path):
-    # 1. Map out the full file structure
+    # 1. Get the CLEAN list of files (No venv, No .git)
+    exclude_dirs = {'.git', 'venv', '__pycache__', '.env', 'node_modules'}
     all_files = []
     for root, dirs, files in os.walk(repo_path):
-        if '.git' in dirs: dirs.remove('.git')
+        dirs[:] = [d for d in dirs if d not in exclude_dirs]
         for file in files:
             all_files.append(os.path.relpath(os.path.join(root, file), repo_path))
     
-    # 2. PRIORITY LOGIC: Did the user mention a folder?
-    combined_text = (issue_title + " " + issue_body).lower()
-    targeted_files = []
-    
-    # Check if any part of the path is mentioned in the issue
+    file_list_str = "\n".join(all_files)
+
+    # --- PASS 1: ASK THE AI TO PICK THE FILE ---
+    print("[*] Phase 1: Asking AI to locate the file...")
+    pick_prompt = f"""
+    Given this GitHub issue: "{issue_title} {issue_body}"
+    And this list of files:
+    {file_list_str}
+
+    Which EXACT file path from the list above should be modified? 
+    Respond with ONLY the file path, nothing else.
+    """
+    pick_response = ollama.generate(model=PLANNER_MODEL, prompt=pick_prompt)
+    potential_target = pick_response.get('response', '').strip().split('\n')[0] 
+
+    # --- NEW: HEAVY SANITIZATION ---
+    # 1. Strip backticks, quotes, and whitespace
+    potential_target = potential_target.replace('`', '').replace('"', '').replace("'", "").strip()
+    # 2. Normalize slashes (Turn all \ into /)
+    potential_target = potential_target.replace('\\', '/')
+
+    # --- VALIDATION ---
+    #if potential_target not in all_files:
+    #    print(f"[!] AI suggested {potential_target}, but it's not in the file list. Defaulting to keyword search...")
+    #    # (Insert your previous keyword search fallback here)
+    #    potential_target = all_files[0] # Temporary fallback
+
+    # --- NEW: SMART VALIDATION ---
+    found_match = None
     for f in all_files:
-        path_parts = f.lower().split(os.sep)
-        if any(part in combined_text for part in path_parts if len(part) > 3):
-            targeted_files.append(f)
+        # Compare normalized versions of both
+        if f.replace('\\', '/') == potential_target:
+            found_match = f
+            break
+            
+    if found_match:
+        potential_target = found_match
+        print(f"[*] MATCH CONFIRMED: {potential_target}")
+    else:
+        print(f"[!] AI suggested '{potential_target}', but list has '{all_files[0]}'.")
+        # If the AI was close (e.g. it forgot a subfolder), let's try a partial match
+        for f in all_files:
+            if potential_target in f.replace('\\', '/'):
+                potential_target = f
+                print(f"[*] PARTIAL MATCH FOUND: {potential_target}")
+                break
 
-    # If we found matches in the mentioned folder, prioritize them
-    # Otherwise, show all files but highlight the folder matches
-    display_files = targeted_files if targeted_files else all_files
-    file_list_str = "\n".join(display_files)
-
-    # 3. Choose the 'Primary' file to read for context
-    # If the user mentioned a specific folder/file, pick that first
-    potential_target = targeted_files[0] if targeted_files else all_files[0]
-    
+    # --- PASS 2: READ THE CONTENT ---
     file_content = ""
-    target_path = os.path.join(repo_path, potential_target)
-    if os.path.exists(target_path):
+    target_path = os.path.normpath(os.path.join(repo_path, potential_target))
+    try:
         with open(target_path, 'r', encoding='utf-8') as f:
             file_content = f.read()
+            print(f"[*] TARGET IDENTIFIED: {potential_target}")
+            print(f"[*] ACTUAL CODE LOADED into Researcher's memory.")
+    except Exception as e:
+        print(f"[!] FAILED TO READ: {target_path} - {e}")
 
-    print(f"\n[*] RESEARCHER focuses on: {potential_target}")
-    
-    prompt = f"""
-    You are a Senior Lead Developer. 
-    THE USER HAS MENTIONED A SPECIFIC AREA: {combined_text}
-    
-    ONLY CONSIDER THESE FILES:
-    {file_list_str}
-    
-    CONTEXT CONTENT ({potential_target}):
+    # --- PASS 3: GENERATE THE PLAN ---
+    print(f"[*] Phase 2: Generating plan based on {potential_target} content...")
+   # final_prompt = f"""
+   # SOURCE CODE FOR {potential_target}:
+   # ```
+   # {file_content}
+
+   # ISSUE: {issue_title}
+
+   # TASK: Provide a technical plan to solve this issue using ONLY the code above. 
+   # Explain exactly which CSS selectors or HTML tags to change.
+   # """
+
+# --- PASS 3: THE FINAL PLAN ---
+    final_prompt = f"""
+    ### CONTEXT ###
+    You are a Senior Developer fixing a specific issue.
+    ISSUE: {issue_title}
+    GOAL: {issue_body}
+
+    ### FILE TO MODIFY ###
+    Path: {potential_target}
+
+    ### SOURCE CODE ###
+    // --- START OF FILE ---
     {file_content}
-    
-    GUIDELINES:
-    1. Identify the specific file(s) that need modification based on the evidence provided.
-    2. Suggest the most direct technical solution. 
-    3. Do NOT suggest infrastructure changes, package installs, or 'best practice' files (like separate CSS/JS) unless they already exist in the file list.
-    4. Focus 100% on the logic/styling required to close the issue.
-    5. Identify the EXACT file from the list above to modify.
-    6. If a folder is provided, only look in that folder!
-    7. Never look in the .git/ and venv/ folders!
-    """
-    
-    response = ollama.generate(model=PLANNER_MODEL, prompt=prompt)
-    return response.get('response', str(response))
+    // --- END OF FILE ---
 
-def execute_coding_task(plan):
-    print(f"[*] CODER ({CODER_MODEL}) is writing code...")
-    prompt = f"Plan: {plan}\nGenerate the full code for the fix. Use markdown blocks."
+    TASK: Provide a technical plan to solve this issue using ONLY the code above. 
+
+    ### INSTRUCTIONS ###
+    1. Only use the code provided above.
+    2. Do NOT suggest new files or environment installs.
+    3. Provide a step-by-step implementation plan for the Coder.
+    """
+
+    response = ollama.generate(model=PLANNER_MODEL, prompt=final_prompt)
+    return response.get('response', str(response)), potential_target
+
+
+
+
+
+    
+
+
+
+    #INSTRUCTIONS:
+    #1. Base your plan EXCLUSIVELY on the code provided between the 'START CODE' and 'END CODE' tags.
+    #2. Do NOT mention venv, .git, or any folders outside of the workspace.
+    #3. Provide the specific logic for the fix.
+    #"""
+    
+def execute_coding_task(plan, repo_path, target_file):
+    """Agent 2: Qwen 2.5 Coder reads the file and proposes the fix."""
+    print(f"[*] CODER is reading {target_file} to prepare the fix...")
+    
+    # 1. Read the actual file content so the Coder sees what it's changing
+    full_path = os.path.normpath(os.path.join(repo_path, target_file))
+    file_content = ""
+    try:
+        with open(full_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except Exception as e:
+        return f"Error reading file for coding: {e}"
+
+    # 2. Ask the Coder to generate the NEW version of the file
+    prompt = f"""
+    You are an Expert Developer. 
+    TARGET FILE: {target_file}
+    
+    CURRENT CONTENT:
+    ```
+    {file_content}
+    PLAN TO IMPLEMENT:
+    {plan}
+
+    TASK:
+    1. Apply the plan to the current content.
+    2. Output the ENTIRE file content. No snippets. No placeholders.
+    3. Start your response with '### File: {target_file}' followed by a code block.
+    """
+
     response = ollama.generate(model=CODER_MODEL, prompt=prompt)
     return response.get('response', str(response))
+
+#def execute_coding_task(plan):
+ #   print(f"[*] CODER ({CODER_MODEL}) is writing code...")
+#    prompt = f"Plan: {plan}\nGenerate the full code for the fix. Use markdown blocks."
+#    response = ollama.generate(model=CODER_MODEL, prompt=prompt)
+#    return response.get('response', str(response))
 
 def execute_review(plan, code):
     print(f"[*] REVIEWER ({PLANNER_MODEL}) is checking code...")
@@ -158,12 +255,12 @@ def supervisor_loop():
                 r_path = clone_repo(repo_name)
                 
                 if input("Run RESEARCHER? (y/n): ").lower() == 'y':
-                    # plan = generate_research_plan(issue.title, issue.body)
-                    plan = generate_research_plan(issue.title, issue.body, r_path)
+                    # plan = generate_research_plan(issue.title, issue.body, r_path)
+                    plan, target_file = generate_research_plan(issue.title, issue.body, r_path)
                     print(f"\nPLAN:\n{plan}")
                     
                     if input("\nRun CODER? (y/n): ").lower() == 'y':
-                        code = execute_coding_task(plan)
+                        code = execute_coding_task(plan, r_path, target_file)
                         print(f"\nCODE:\n{code}")
                         
                         if input("\nRun REVIEWER? (y/n): ").lower() == 'y':
